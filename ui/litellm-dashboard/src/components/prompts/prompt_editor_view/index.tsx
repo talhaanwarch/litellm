@@ -39,6 +39,7 @@ const PromptEditorView: React.FC<PromptEditorViewProps> = ({ onClose, onSuccess,
           content: "Enter task specifics. Use {{template_variables}} for dynamic inputs",
         },
       ],
+      environment: "development",
     };
   };
 
@@ -208,6 +209,7 @@ const PromptEditorView: React.FC<PromptEditorViewProps> = ({ onClose, onSuccess,
         },
         prompt_info: {
           prompt_type: "db",
+          environment: prompt.environment,
         },
       };
 
@@ -273,6 +275,8 @@ const PromptEditorView: React.FC<PromptEditorViewProps> = ({ onClose, onSuccess,
           promptModel={prompt.model}
           promptVariables={extractTemplateVariables()}
           accessToken={accessToken}
+          environment={prompt.environment}
+          onEnvironmentChange={(env) => setPrompt({ ...prompt, environment: env })}
         />
 
         <div className="flex-1 flex overflow-hidden">

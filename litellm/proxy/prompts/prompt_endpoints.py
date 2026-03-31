@@ -192,19 +192,22 @@ def get_latest_prompt_versions(prompts: List[PromptSpec]) -> List[PromptSpec]:
     return list(latest_prompts.values())
 
 
-async def get_next_version_for_prompt(prisma_client, prompt_id: str) -> int:
+async def get_next_version_for_prompt(
+    prisma_client, prompt_id: str, environment: str = "development"
+) -> int:
     """
-    Get the next version number for a prompt.
+    Get the next version number for a prompt in a specific environment.
 
     Args:
         prisma_client: Prisma database client
         prompt_id: Base prompt ID
+        environment: The environment to check versions for
 
     Returns:
         Next version number (1 if no versions exist, max_version + 1 otherwise)
     """
     existing_prompts = await prisma_client.db.litellm_prompttable.find_many(
-        where={"prompt_id": prompt_id}
+        where={"prompt_id": prompt_id, "environment": environment}
     )
 
     if existing_prompts:
@@ -231,6 +234,8 @@ def create_versioned_prompt_spec(db_prompt) -> PromptSpec:
     prompt_dict = db_prompt.model_dump()
     base_prompt_id = prompt_dict["prompt_id"]
     version = prompt_dict.get("version", 1)
+    environment = prompt_dict.get("environment", "development")
+    created_by = prompt_dict.get("created_by")
 
     # Parse litellm_params
     litellm_params_data = prompt_dict.get("litellm_params")
@@ -256,6 +261,8 @@ def create_versioned_prompt_spec(db_prompt) -> PromptSpec:
         prompt_info=prompt_info,
         created_at=prompt_dict.get("created_at"),
         updated_at=prompt_dict.get("updated_at"),
+        environment=environment,
+        created_by=created_by,
     )
 
 
@@ -277,6 +284,7 @@ class PatchPromptRequest(BaseModel):
     response_model=ListPromptsResponse,
 )
 async def list_prompts(
+    environment: Optional[str] = None,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """
@@ -318,23 +326,28 @@ async def list_prompts(
     if key_metadata is not None:
         prompts = cast(Optional[List[str]], key_metadata.get("prompts", None))
         if prompts is not None:
+            all_prompts = [
+                IN_MEMORY_PROMPT_REGISTRY.IN_MEMORY_PROMPTS[prompt_id]
+                for prompt_id in prompts
+                if prompt_id in IN_MEMORY_PROMPT_REGISTRY.IN_MEMORY_PROMPTS
+            ]
+            if environment:
+                all_prompts = [p for p in all_prompts if p.environment == environment]
             prompt_list = []
-            for prompt_id in prompts:
-                if prompt_id in IN_MEMORY_PROMPT_REGISTRY.IN_MEMORY_PROMPTS:
-                    original_prompt = IN_MEMORY_PROMPT_REGISTRY.IN_MEMORY_PROMPTS[
-                        prompt_id
-                    ]
-                    # Create a copy with base prompt_id (without version suffix)
-                    prompt_copy = PromptSpec(
-                        prompt_id=get_base_prompt_id(
-                            prompt_id=original_prompt.prompt_id
-                        ),
-                        litellm_params=original_prompt.litellm_params,
-                        prompt_info=original_prompt.prompt_info,
-                        created_at=original_prompt.created_at,
-                        updated_at=original_prompt.updated_at,
-                    )
-                    prompt_list.append(prompt_copy)
+            for original_prompt in all_prompts:
+                # Create a copy with base prompt_id (without version suffix)
+                prompt_copy = PromptSpec(
+                    prompt_id=get_base_prompt_id(
+                        prompt_id=original_prompt.prompt_id
+                    ),
+                    litellm_params=original_prompt.litellm_params,
+                    prompt_info=original_prompt.prompt_info,
+                    created_at=original_prompt.created_at,
+                    updated_at=original_prompt.updated_at,
+                    environment=original_prompt.environment,
+                    created_by=original_prompt.created_by,
+                )
+                prompt_list.append(prompt_copy)
             return ListPromptsResponse(prompts=prompt_list)
     # check if user is proxy admin - show all prompts
     if user_api_key_dict.user_role is not None and (
@@ -343,6 +356,8 @@ async def list_prompts(
     ):
         # Get all prompts and filter to show only the latest version of each
         all_prompts = list(IN_MEMORY_PROMPT_REGISTRY.IN_MEMORY_PROMPTS.values())
+        if environment:
+            all_prompts = [p for p in all_prompts if p.environment == environment]
         latest_prompts = get_latest_prompt_versions(prompts=all_prompts)
         # Create copies with base prompt_id (without version suffix) for display
         prompts_for_display = []
@@ -353,6 +368,8 @@ async def list_prompts(
                 prompt_info=original_prompt.prompt_info,
                 created_at=original_prompt.created_at,
                 updated_at=original_prompt.updated_at,
+                environment=original_prompt.environment,
+                created_by=original_prompt.created_by,
             )
             prompts_for_display.append(prompt_copy)
         return ListPromptsResponse(prompts=prompts_for_display)
@@ -368,6 +385,7 @@ async def list_prompts(
 )
 async def get_prompt_versions(
     prompt_id: str,
+    environment: Optional[str] = None,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """
@@ -423,6 +441,7 @@ async def get_prompt_versions(
         prompt
         for prompt in all_prompts
         if get_base_prompt_id(prompt_id=prompt.prompt_id) == base_prompt_id
+        and (environment is None or prompt.environment == environment)
     ]
 
     if not prompt_versions:
@@ -448,6 +467,8 @@ async def get_prompt_versions(
             created_at=prompt.created_at,
             updated_at=prompt.updated_at,
             version=version_number,  # Explicit version field (e.g., 3)
+            environment=prompt.environment,
+            created_by=prompt.created_by,
         )
         versioned_prompts.append(versioned_prompt)
 
@@ -471,6 +492,7 @@ async def get_prompt_versions(
 )
 async def get_prompt_info(
     prompt_id: str,
+    environment: Optional[str] = None,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """
@@ -549,6 +571,8 @@ async def get_prompt_info(
         created_at=prompt_spec.created_at,
         updated_at=prompt_spec.updated_at,
         version=version_number,  # Explicit version field
+        environment=prompt_spec.environment,
+        created_by=prompt_spec.created_by,
     )
 
     # Get prompt content from the callback
@@ -641,9 +665,18 @@ async def create_prompt(
         )
 
     try:
+        # Extract environment from request
+        environment = (
+            request.prompt_info.environment
+            if request.prompt_info and request.prompt_info.environment
+            else "development"
+        )
+
         # Get next version number
         new_version = await get_next_version_for_prompt(
-            prisma_client=prisma_client, prompt_id=request.prompt_id
+            prisma_client=prisma_client,
+            prompt_id=request.prompt_id,
+            environment=environment,
         )
 
         # Store prompt in db with version
@@ -651,6 +684,8 @@ async def create_prompt(
             data={
                 "prompt_id": request.prompt_id,
                 "version": new_version,
+                "environment": environment,
+                "created_by": user_api_key_dict.user_id,
                 "litellm_params": request.litellm_params.model_dump_json(),
                 "prompt_info": (
                     request.prompt_info.model_dump_json()
@@ -733,14 +768,22 @@ async def update_prompt(
         # Strip version suffix from prompt_id if present (e.g., "jack_success.v1" -> "jack_success")
         base_prompt_id = get_base_prompt_id(prompt_id=prompt_id)
 
-        # Check if any version exists
+        # Extract environment from request
+        environment = (
+            request.prompt_info.environment
+            if request.prompt_info and request.prompt_info.environment
+            else "development"
+        )
+
+        # Check if any version exists in the target environment
         existing_prompts = await prisma_client.db.litellm_prompttable.find_many(
-            where={"prompt_id": base_prompt_id}
+            where={"prompt_id": base_prompt_id, "environment": environment}
         )
 
         if not existing_prompts:
             raise HTTPException(
-                status_code=404, detail=f"Prompt with ID {base_prompt_id} not found"
+                status_code=404,
+                detail=f"Prompt with ID {base_prompt_id} not found in environment {environment}",
             )
 
         # Check if it's a config prompt
@@ -756,7 +799,9 @@ async def update_prompt(
 
         # Get next version number (UPDATE creates a new version)
         new_version = await get_next_version_for_prompt(
-            prisma_client=prisma_client, prompt_id=base_prompt_id
+            prisma_client=prisma_client,
+            prompt_id=base_prompt_id,
+            environment=environment,
         )
 
         # Store new version in db
@@ -764,6 +809,8 @@ async def update_prompt(
             data={
                 "prompt_id": base_prompt_id,
                 "version": new_version,
+                "environment": environment,
+                "created_by": user_api_key_dict.user_id,
                 "litellm_params": request.litellm_params.model_dump_json(),
                 "prompt_info": (
                     request.prompt_info.model_dump_json()
@@ -800,6 +847,7 @@ async def update_prompt(
 )
 async def delete_prompt(
     prompt_id: str,
+    environment: Optional[str] = None,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """
@@ -867,10 +915,13 @@ async def delete_prompt(
         # Get the base prompt ID (without version suffix) for database deletion
         base_prompt_id = get_base_prompt_id(prompt_id=prompt_id)
 
+        # Build delete filter; scope to environment if provided
+        delete_where: Dict[str, Any] = {"prompt_id": base_prompt_id}
+        if environment:
+            delete_where["environment"] = environment
+
         # Delete all versions of the prompt from the database
-        await prisma_client.db.litellm_prompttable.delete_many(
-            where={"prompt_id": base_prompt_id}
-        )
+        await prisma_client.db.litellm_prompttable.delete_many(where=delete_where)
 
         # Remove all versions of the prompt from memory
         IN_MEMORY_PROMPT_REGISTRY.delete_prompts_by_base_id(base_prompt_id)
@@ -965,13 +1016,18 @@ async def patch_prompt(
         if updated_litellm_params is None:
             raise HTTPException(status_code=400, detail="litellm_params cannot be None")
 
+        # Build update data dict
+        update_data: Dict[str, Any] = {
+            "litellm_params": updated_litellm_params.model_dump_json(),
+            "prompt_info": updated_prompt_info.model_dump_json(),
+        }
+        if user_api_key_dict.user_id:
+            update_data["created_by"] = user_api_key_dict.user_id
+
         # Create updated prompt spec - cast to satisfy typing
         updated_prompt_db_entry = await prisma_client.db.litellm_prompttable.update(
             where={"prompt_id": prompt_id},
-            data={
-                "litellm_params": updated_litellm_params.model_dump_json(),
-                "prompt_info": updated_prompt_info.model_dump_json(),
-            },
+            data=update_data,
         )
 
         updated_prompt_spec = PromptSpec(**updated_prompt_db_entry.model_dump())

@@ -214,6 +214,32 @@ const PromptInfoView: React.FC<PromptInfoProps> = ({ promptId, onClose, accessTo
               </Card>
 
               <Card>
+                <Text>Environment</Text>
+                <div className="mt-2">
+                  <Title>{promptData.environment || "development"}</Title>
+                  <Badge
+                    color={
+                      promptData.environment === "production"
+                        ? "red"
+                        : promptData.environment === "staging"
+                        ? "yellow"
+                        : "green"
+                    }
+                    className="mt-1"
+                  >
+                    {promptData.environment || "development"}
+                  </Badge>
+                </div>
+              </Card>
+
+              <Card>
+                <Text>Created By</Text>
+                <div className="mt-2">
+                  <Title className="text-sm">{promptData.created_by || "-"}</Title>
+                </div>
+              </Card>
+
+              <Card>
                 <Text>Created At</Text>
                 <div className="mt-2">
                   <Title>{formatDate(promptData.created_at)}</Title>

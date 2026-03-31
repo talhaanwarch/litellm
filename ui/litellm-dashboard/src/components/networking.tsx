@@ -202,6 +202,7 @@ export interface Model {
 
 interface PromptInfo {
   prompt_type: string;
+  environment?: string;
 }
 
 export interface PromptSpec {
@@ -211,6 +212,8 @@ export interface PromptSpec {
   created_at?: string;
   updated_at?: string;
   version?: number; // Explicit version number for version history
+  environment?: string;
+  created_by?: string;
 }
 
 export interface PromptTemplateBase {
@@ -6035,9 +6038,15 @@ export const estimateAttachmentImpactCall = async (
   }
 };
 
-export const getPromptsList = async (accessToken: string): Promise<ListPromptsResponse> => {
+export const getPromptsList = async (
+  accessToken: string,
+  environment?: string,
+): Promise<ListPromptsResponse> => {
   try {
-    const url = proxyBaseUrl ? `${proxyBaseUrl}/prompts/list` : `/prompts/list`;
+    let url = proxyBaseUrl ? `${proxyBaseUrl}/prompts/list` : `/prompts/list`;
+    if (environment) {
+      url += `?environment=${encodeURIComponent(environment)}`;
+    }
     const response = await fetch(url, {
       method: "GET",
       headers: {
